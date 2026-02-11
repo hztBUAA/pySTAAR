@@ -15,6 +15,23 @@ from scipy import linalg, special, stats
 
 from .staar_stats import cct, cct_pval, saddle
 
+# Import Numba-accelerated SPA functions (falls back gracefully if numba unavailable)
+from ._spa_numba import (
+    NUMBA_AVAILABLE,
+    k_binary_spa_numba,
+    k1_binary_spa_numba,
+    k2_binary_spa_numba,
+    nr_binary_spa_numba,
+    bisection_binary_spa_numba,
+    saddle_binary_spa_numba,
+    burden_spa_two_sided_pvalue_numba,
+    warmup_spa_jit,
+)
+
+# Warm up JIT compilation at module load (if numba available)
+if NUMBA_AVAILABLE:
+    warmup_spa_jit()
+
 
 def matrix_flip(G: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Impute missing genotypes, flip to minor allele, and compute AF/MAF.
@@ -239,6 +256,8 @@ def _eigvalsh_symmetric(matrix: np.ndarray) -> np.ndarray:
 
 
 def _k_binary_spa(x: float, muhat: np.ndarray, g: np.ndarray) -> float:
+    if NUMBA_AVAILABLE:
+        return k_binary_spa_numba(x, muhat, g)
     xg = np.clip(x * g, -700.0, 700.0)
     return float(np.sum(-x * muhat * g + np.log1p(-muhat + muhat * np.exp(xg))))
 
@@ -249,6 +268,8 @@ def _k_binary_spa_alt(x: float, muhat: np.ndarray, g: np.ndarray) -> float:
 
 
 def _k1_binary_spa(x: float, muhat: np.ndarray, g: np.ndarray, q: float) -> float:
+    if NUMBA_AVAILABLE:
+        return k1_binary_spa_numba(x, muhat, g, q)
     xg = np.clip(-x * g, -700.0, 700.0)
     term = muhat * g / (muhat + (1.0 - muhat) * np.exp(xg))
     return float(np.sum(-muhat * g + term) - q)
@@ -261,6 +282,8 @@ def _k1_binary_spa_alt(x: float, muhat: np.ndarray, g: np.ndarray, q: float) -> 
 
 
 def _k2_binary_spa(x: float, muhat: np.ndarray, g: np.ndarray) -> float:
+    if NUMBA_AVAILABLE:
+        return k2_binary_spa_numba(x, muhat, g)
     ex = np.exp(np.clip(-x * g, -700.0, 700.0))
     num = muhat * (1.0 - muhat) * (g**2) * ex
     den = (muhat + (1.0 - muhat) * ex) ** 2
