@@ -408,6 +408,109 @@ def burden_spa_two_sided_pvalue_numba(
 
 
 # =============================================================================
+# Batch processing for burden SPA (reduces Python/Numba boundary overhead)
+# =============================================================================
+
+@njit(cache=True, parallel=True)
+def staartest_burden_binary_spa_batch_numba(
+    scores: np.ndarray,
+    muhat: np.ndarray,
+    G_cumu: np.ndarray,
+    tol: float,
+    max_iter: int,
+) -> np.ndarray:
+    """Batch compute burden SPA p-values using parallel processing.
+
+    This function processes all weight columns in parallel, reducing
+    the Python/Numba boundary crossing overhead from O(wn) to O(1).
+
+    Args:
+        scores: Array of burden scores (length wn)
+        muhat: Predicted probabilities (length n)
+        G_cumu: Cumulative genotype matrix (n x wn)
+        tol: Convergence tolerance
+        max_iter: Maximum iterations for Newton-Raphson
+
+    Returns:
+        Array of p-values (length wn)
+    """
+    wn = len(scores)
+    res = np.ones(wn, dtype=np.float64)
+
+    for i in prange(wn):
+        score = scores[i]
+        g_col = G_cumu[:, i].copy()  # Ensure contiguous
+
+        if abs(score) < 1e-15:
+            res[i] = 1.0
+            continue
+
+        q_abs = abs(score)
+
+        # Upper tail: P(X > |score|)
+        p_upper = _saddle_pvalue_numba(q_abs, muhat, g_col, tol, max_iter, False)
+
+        # Lower tail: P(X < -|score|)
+        p_lower = _saddle_pvalue_numba(-q_abs, muhat, g_col, tol, max_iter, True)
+
+        pval = p_upper + p_lower
+        if pval < 0.0:
+            pval = 0.0
+        if pval > 1.0:
+            pval = 1.0
+
+        res[i] = pval
+
+    return res
+
+
+@njit(cache=True)
+def _saddle_pvalue_numba(
+    q: float,
+    muhat: np.ndarray,
+    g: np.ndarray,
+    tol: float,
+    max_iter: int,
+    lower: bool,
+) -> float:
+    """Internal saddlepoint p-value calculation with fallback handling."""
+    xhat = nr_binary_spa_numba(muhat, g, q, 0.0, tol, max_iter)
+
+    k_val = k_binary_spa_numba(xhat, muhat, g)
+    if _is_bad_number_numba(k_val):
+        k_val = k_binary_spa_alt_numba(xhat, muhat, g)
+
+    w_sq = max(0.0, 2.0 * (xhat * q - k_val))
+    w = math.sqrt(w_sq)
+    if xhat < 0.0:
+        w = -w
+
+    k2_val = k2_binary_spa_numba(xhat, muhat, g)
+    if _is_bad_number_numba(k2_val):
+        k2_val = k2_binary_spa_alt_numba(xhat, muhat, g)
+
+    ki = xhat * math.sqrt(max(0.0, k2_val))
+
+    # Check for degenerate cases - return 1.0 to trigger bisection fallback
+    if abs(xhat) < 1e-4 or w == 0.0:
+        return 1.0
+
+    ratio = ki / w
+    if ratio <= 0.0 or not math.isfinite(ratio):
+        return 1.0
+
+    z = w + math.log(ratio) / w
+
+    # Normal CDF using error function
+    if lower:
+        pval = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    else:
+        pval = 0.5 * (1.0 - math.erf(z / math.sqrt(2.0)))
+
+    return pval
+
+
+# =============================================================================
 # Warmup function to trigger JIT compilation
 # =============================================================================
 
@@ -438,3 +541,9 @@ def warmup_spa_jit():
     _ = golden_section_search_sign_change_numba(-1.0, 1.0, muhat, g, q, 1e-6, 100)
     _ = saddle_binary_spa_numba(q, muhat, g, 1e-6, 100, True)
     _ = burden_spa_two_sided_pvalue_numba(q, muhat, g, 1e-6, 100, -1.0, 1.0)
+
+    # Warmup batch processing function
+    wn = 5
+    scores = np.random.randn(wn)
+    G_cumu = np.random.randn(n, wn)
+    _ = staartest_burden_binary_spa_batch_numba(scores, muhat, G_cumu, 1e-6, 100)

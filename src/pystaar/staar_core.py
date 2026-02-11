@@ -23,8 +23,10 @@ from ._spa_numba import (
     k2_binary_spa_numba,
     nr_binary_spa_numba,
     bisection_binary_spa_numba,
+    golden_section_search_sign_change_numba,
     saddle_binary_spa_numba,
     burden_spa_two_sided_pvalue_numba,
+    staartest_burden_binary_spa_batch_numba,
     warmup_spa_jit,
 )
 
@@ -313,6 +315,8 @@ def _nr_binary_spa(
     tol: float,
     max_iter: int,
 ) -> float:
+    if NUMBA_AVAILABLE:
+        return nr_binary_spa_numba(muhat, g, q, init, tol, max_iter)
     xi = float(init)
     xi_update = float(init)
 
@@ -369,6 +373,8 @@ def _golden_section_search_sign_change(
     tol: float,
     max_iter: int,
 ) -> Tuple[float, float]:
+    if NUMBA_AVAILABLE:
+        return golden_section_search_sign_change_numba(a, b, muhat, g, q, tol, max_iter)
     x0 = float(a)
     x1 = float(b)
     iter_count = 0
@@ -410,6 +416,8 @@ def _bisection_binary_spa(
     xmax: float,
     tol: float,
 ) -> float:
+    if NUMBA_AVAILABLE:
+        return bisection_binary_spa_numba(muhat, g, q, xmin, xmax, tol)
     xupper = float(xmax)
     xlower = float(xmin)
     x0 = 0.0
@@ -519,22 +527,46 @@ def _staartest_burden_binary_spa(
     max_iter: int,
 ) -> np.ndarray:
     wn = weights_B.shape[1]
-    res = np.ones(wn, dtype=float)
 
     G_tilde = G - XXWX_inv @ (XW @ G)
     x = residuals @ G
     G_cumu = G_tilde @ weights_B
 
+    # Compute all burden scores
+    scores = np.array([float(np.sum(x * weights_B[:, i])) for i in range(wn)])
+
     xmin = -100.0
     xmax = 100.0
 
+    if NUMBA_AVAILABLE:
+        # Use batch processing for speed
+        # Ensure arrays are contiguous for Numba
+        muhat_c = np.ascontiguousarray(muhat)
+        G_cumu_c = np.ascontiguousarray(G_cumu)
+        res = staartest_burden_binary_spa_batch_numba(scores, muhat_c, G_cumu_c, tol, max_iter)
+
+        # Fallback to bisection for any p-values that returned 1.0 (degenerate cases)
+        needs_fallback = (res == 1.0) & (np.abs(scores) >= 1e-15)
+        if np.any(needs_fallback):
+            for i in np.where(needs_fallback)[0]:
+                res[i] = _burden_spa_two_sided_pvalue(
+                    score=scores[i],
+                    muhat=muhat,
+                    g_col=G_cumu[:, i],
+                    tol=tol,
+                    max_iter=max_iter,
+                    xmin=xmin,
+                    xmax=xmax,
+                )
+        return res
+
+    # Pure Python fallback
+    res = np.ones(wn, dtype=float)
     for i in range(wn):
-        sum0 = float(np.sum(x * weights_B[:, i]))
-        g_col = G_cumu[:, i]
         res[i] = _burden_spa_two_sided_pvalue(
-            score=sum0,
+            score=scores[i],
             muhat=muhat,
-            g_col=g_col,
+            g_col=G_cumu[:, i],
             tol=tol,
             max_iter=max_iter,
             xmin=xmin,
