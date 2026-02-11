@@ -106,6 +106,94 @@ def cct(pvals: Iterable[float], weights: Iterable[float] | None = None) -> float
 
 
 # =============================================================================
+# Numba-accelerated CCT functions
+# =============================================================================
+
+@njit(cache=True, fastmath=True)
+def _cauchy_sf(x: float) -> float:
+    """Standard Cauchy survival function: P(X > x) = 0.5 - arctan(x)/pi."""
+    return 0.5 - math.atan(x) / math.pi
+
+
+@njit(cache=True, fastmath=True)
+def _cct_stat_numba(pvals: np.ndarray, weights: np.ndarray) -> float:
+    """Compute CCT statistic with normalized weights (assumes valid inputs)."""
+    n = len(pvals)
+    cct_stat = 0.0
+    for i in range(n):
+        p = pvals[i]
+        w = weights[i]
+        if p < 1e-16:
+            cct_stat += w / p / math.pi
+        else:
+            cct_stat += w * math.tan((0.5 - p) * math.pi)
+    return cct_stat
+
+
+@njit(cache=True)
+def _cct_pval_fast_numba(pvals: np.ndarray, weights: np.ndarray) -> float:
+    """Fast CCT p-value computation (assumes pre-validated inputs).
+
+    Assumes:
+    - pvals are all in (0, 1) (no NaN, no exact 0 or 1)
+    - weights are already normalized (sum to 1, all non-negative)
+    """
+    # Filter out pvals >= 1.0 and renormalize weights
+    n = len(pvals)
+    valid_count = 0
+    weight_sum = 0.0
+
+    # First pass: count valid and sum weights
+    for i in range(n):
+        if pvals[i] < 1.0:
+            valid_count += 1
+            weight_sum += weights[i]
+
+    if valid_count == 0:
+        return 1.0
+
+    if weight_sum <= 0.0:
+        return 1.0
+
+    # Compute CCT stat with renormalized weights
+    cct_stat = 0.0
+    for i in range(n):
+        if pvals[i] < 1.0:
+            p = pvals[i]
+            w = weights[i] / weight_sum  # renormalize
+            if p < 1e-16:
+                cct_stat += w / p / math.pi
+            else:
+                cct_stat += w * math.tan((0.5 - p) * math.pi)
+
+    if cct_stat > 1e15:
+        return (1.0 / cct_stat) / math.pi
+
+    return _cauchy_sf(cct_stat)
+
+
+def cct_pval_fast(pvals: np.ndarray, weights: np.ndarray) -> float:
+    """Fast CCT p-value for internal use (minimal validation).
+
+    This is optimized for repeated calls with pre-validated inputs.
+    Use cct_pval() for the full-validation version.
+    """
+    if not NUMBA_AVAILABLE:
+        # Fallback to original
+        return cct_pval(pvals, weights)
+
+    pvals = np.ascontiguousarray(pvals, dtype=np.float64)
+    weights = np.ascontiguousarray(weights, dtype=np.float64)
+
+    # Quick normalization
+    weight_sum = np.sum(weights)
+    if weight_sum > 0:
+        weights = weights / weight_sum
+
+    return _cct_pval_fast_numba(pvals, weights)
+
+
+# =============================================================================
 # Numba-accelerated saddle point approximation functions
 # =============================================================================
 

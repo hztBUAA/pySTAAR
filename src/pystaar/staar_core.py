@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 from scipy import linalg, special, stats
 
-from .staar_stats import cct, cct_pval, saddle
+from .staar_stats import cct, cct_pval, cct_pval_fast, saddle
 
 # Import Numba-accelerated SPA functions (falls back gracefully if numba unavailable)
 from ._spa_numba import (
@@ -787,14 +787,14 @@ def _staartest_pvalues(
             for idx_pos, idx in enumerate(id_common):
                 wseq[idx_pos] = weights_A[idx, i]
         if n0 == 0:
-            res[2 * wn + i] = cct_pval(pseq[:n1], wseq[:n1])
+            res[2 * wn + i] = cct_pval_fast(pseq[:n1], wseq[:n1])
         else:
             sum0 = np.sum(x[id_veryrare] * weights_B[id_veryrare, i])
             sumw = np.sum(weights_A[id_veryrare, i])
             sumx = _safe_ratio_square(sum0, np.sum(Covw[np.ix_(id_veryrare, id_veryrare)]))
             pseq[n1] = _pchisq_upper(sumx, 1)
             wseq[n1] = sumw / n0
-            res[2 * wn + i] = cct_pval(pseq[: n1 + 1], wseq[: n1 + 1])
+            res[2 * wn + i] = cct_pval_fast(pseq[: n1 + 1], wseq[: n1 + 1])
 
     return res
 
@@ -969,14 +969,14 @@ def _staartest_pvalues_smmat(
             for idx_pos, idx in enumerate(id_common):
                 wseq[idx_pos] = weights_A[idx, i]
         if n0 == 0:
-            res[2 * wn + i] = cct_pval(pseq[:n1], wseq[:n1])
+            res[2 * wn + i] = cct_pval_fast(pseq[:n1], wseq[:n1])
         else:
             sum0 = np.sum(x[id_veryrare] * weights_B[id_veryrare, i])
             sumw = np.sum(weights_A[id_veryrare, i])
             sumx = _safe_ratio_square(sum0, np.sum(Covw[np.ix_(id_veryrare, id_veryrare)]))
             pseq[n1] = _pchisq_upper(sumx, 1)
             wseq[n1] = sumw / n0
-            res[2 * wn + i] = cct_pval(pseq[: n1 + 1], wseq[: n1 + 1])
+            res[2 * wn + i] = cct_pval_fast(pseq[: n1 + 1], wseq[: n1 + 1])
 
     return res
 
